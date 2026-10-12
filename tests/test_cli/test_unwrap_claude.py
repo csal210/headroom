@@ -536,3 +536,44 @@ def test_remove_claude_managed_hooks_strips_enable_tool_search(tmp_path: Path) -
 
     payload = json.loads(settings.read_text(encoding="utf-8"))
     assert payload["env"] == {"KEEP": "1"}
+
+
+def test_unwrap_claude_removes_local_init_hooks_and_plugin(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``headroom init claude`` (local scope) writes .claude/settings.local.json;
+    unwrap must remove its hooks and plugin entry, not only the proxy URL."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.chdir(tmp_path)
+    ensure = "headroom init hook ensure --profile init-x --marker headroom-init-claude"
+    settings = tmp_path / ".claude" / "settings.local.json"
+    settings.parent.mkdir()
+    settings.write_text(
+        json.dumps(
+            {
+                "env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8787"},
+                "hooks": {
+                    "SessionStart": [
+                        {"matcher": "startup", "hooks": [{"type": "command", "command": "keep"}]},
+                        {"matcher": "startup|resume", "hooks": [{"command": ensure}]},
+                    ],
+                    "PreToolUse": [{"matcher": "Bash", "hooks": [{"command": ensure}]}],
+                },
+                "enabledPlugins": {"headroom@headroom-marketplace": True, "other@m": True},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(main, ["unwrap", "claude", "--keep-mcp", "--no-stop-proxy"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(settings.read_text(encoding="utf-8"))
+    assert payload["hooks"] == {
+        "SessionStart": [{"matcher": "startup", "hooks": [{"type": "command", "command": "keep"}]}]
+    }
+    assert payload["enabledPlugins"] == {"other@m": True}
+    assert "env" not in payload

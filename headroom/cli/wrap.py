@@ -1213,6 +1213,9 @@ _HEADROOM_HOOK_MARKERS = ("headroom-init-claude",)
 # (GH #746), paired with init/wrap setting it.
 _HEADROOM_ENV_KEYS = ("ANTHROPIC_BASE_URL", "ENABLE_TOOL_SEARCH")
 
+# Plugin ``headroom init claude`` enables (its hooks restart the proxy too).
+_HEADROOM_PLUGIN = "headroom@headroom-marketplace"
+
 # Stable marker embedded in the SessionStart self-heal hook that ``wrap claude``
 # installs (issue #2221). Lets that hook be found (idempotent install) and
 # removed (unwrap) by its command string.
@@ -1225,7 +1228,8 @@ def _remove_claude_managed_hooks(settings_path: Path | None = None) -> bool:
     Reverses what ``headroom init claude`` adds:
       * PreToolUse / SessionStart hooks whose command contains a Headroom marker
         (``headroom-init-claude``), and
-      * the ``ANTHROPIC_BASE_URL`` proxy-routing env var.
+      * the ``ANTHROPIC_BASE_URL`` proxy-routing env var, and
+      * the Headroom marketplace plugin entry in ``enabledPlugins``.
     Unrelated settings and user-authored hooks are left untouched.
     """
 
@@ -1298,6 +1302,12 @@ def _remove_claude_managed_hooks(settings_path: Path | None = None) -> bool:
                 payload["env"] = env
             else:
                 payload.pop("env", None)
+
+    plugins = payload.get("enabledPlugins")
+    if isinstance(plugins, dict) and plugins.pop(_HEADROOM_PLUGIN, None) is not None:
+        changed = True
+        if not plugins:
+            payload.pop("enabledPlugins", None)
 
     if not changed:
         return False
@@ -6432,12 +6442,13 @@ def unwrap_claude(
     else:
         click.echo("  Kept Claude MCP registrations (--keep-mcp).")
 
-    if _remove_claude_managed_hooks():
-        click.echo("  Removed Headroom-managed hooks and proxy env from settings.json.")
-    else:
-        click.echo("  No Headroom-managed hooks found in settings.json.")
-
     _unwrap_settings_path = Path.cwd() / ".claude" / "settings.local.json"
+    # User scope (``init -g``) and local scope (``init``); ``|`` so both run
+    if _remove_claude_managed_hooks() | _remove_claude_managed_hooks(_unwrap_settings_path):
+        click.echo("  Removed Headroom-managed hooks and proxy env from Claude settings.")
+    else:
+        click.echo("  No Headroom-managed hooks found in Claude settings.")
+
     if _remove_claude_wrap_selfheal_hook(_unwrap_settings_path):
         click.echo("  Removed Headroom wrap self-heal SessionStart hook (issue #2221).")
     for _foundry, _vertex in ((False, False), (True, False), (False, True)):
